@@ -43,7 +43,10 @@ import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.util.StandardValidators;
 import org.apache.nifi.processors.azure.storage.utils.ADLSFileInfo;
 import org.apache.nifi.processors.azure.storage.utils.AzureStorageUtils;
+import org.apache.nifi.processors.azure.storage.utils.DataLakeServiceClientFactory;
 import org.apache.nifi.serialization.record.RecordSchema;
+import org.apache.nifi.services.azure.storage.ADLSCredentialsDetails;
+import org.apache.nifi.services.azure.storage.ADLSCredentialsService;
 
 import java.io.IOException;
 import java.util.Arrays;
@@ -63,9 +66,9 @@ import static org.apache.nifi.processor.util.list.ListedEntityTracker.TRACKING_T
 import static org.apache.nifi.processors.azure.AbstractAzureDataLakeStorageProcessor.ADLS_CREDENTIALS_SERVICE;
 import static org.apache.nifi.processors.azure.AbstractAzureDataLakeStorageProcessor.DIRECTORY;
 import static org.apache.nifi.processors.azure.AbstractAzureDataLakeStorageProcessor.FILESYSTEM;
+import static org.apache.nifi.processors.azure.AbstractAzureDataLakeStorageProcessor.TEMP_FILE_DIRECTORY;
 import static org.apache.nifi.processors.azure.AbstractAzureDataLakeStorageProcessor.evaluateDirectoryProperty;
 import static org.apache.nifi.processors.azure.AbstractAzureDataLakeStorageProcessor.evaluateFileSystemProperty;
-import static org.apache.nifi.processors.azure.AbstractAzureDataLakeStorageProcessor.getStorageClient;
 import static org.apache.nifi.processors.azure.storage.utils.ADLSAttributes.ATTR_DESCRIPTION_DIRECTORY;
 import static org.apache.nifi.processors.azure.storage.utils.ADLSAttributes.ATTR_DESCRIPTION_ETAG;
 import static org.apache.nifi.processors.azure.storage.utils.ADLSAttributes.ATTR_DESCRIPTION_FILENAME;
@@ -129,6 +132,15 @@ public class ListAzureDataLakeStorage extends AbstractListAzureProcessor<ADLSFil
             .expressionLanguageSupported(ExpressionLanguageScope.VARIABLE_REGISTRY)
             .build();
 
+    public static final PropertyDescriptor INCLUDE_TEMPORARY_FILES = new PropertyDescriptor.Builder()
+            .name("include-temporary-files")
+            .displayName("Include Temporary Files")
+            .description("Whether to include temporary files when listing the contents of configured directory paths.")
+            .required(true)
+            .allowableValues(Boolean.TRUE.toString(), Boolean.FALSE.toString())
+            .defaultValue(Boolean.FALSE.toString())
+            .build();
+
     private static final List<PropertyDescriptor> PROPERTIES = Collections.unmodifiableList(Arrays.asList(
             ADLS_CREDENTIALS_SERVICE,
             FILESYSTEM,
@@ -136,6 +148,7 @@ public class ListAzureDataLakeStorage extends AbstractListAzureProcessor<ADLSFil
             RECURSE_SUBDIRECTORIES,
             FILE_FILTER,
             PATH_FILTER,
+            INCLUDE_TEMPORARY_FILES,
             RECORD_WRITER,
             LISTING_STRATEGY,
             TRACKING_STATE_CACHE,
@@ -159,6 +172,8 @@ public class ListAzureDataLakeStorage extends AbstractListAzureProcessor<ADLSFil
     private volatile Pattern filePattern;
     private volatile Pattern pathPattern;
 
+    private DataLakeServiceClientFactory clientFactory;
+
     @Override
     protected List<PropertyDescriptor> getSupportedPropertyDescriptors() {
         return PROPERTIES;
@@ -168,12 +183,14 @@ public class ListAzureDataLakeStorage extends AbstractListAzureProcessor<ADLSFil
     public void onScheduled(final ProcessContext context) {
         filePattern = getPattern(context, FILE_FILTER);
         pathPattern = getPattern(context, PATH_FILTER);
+        clientFactory = new DataLakeServiceClientFactory(getLogger(), AzureStorageUtils.getProxyOptions(context));
     }
 
     @OnStopped
     public void onStopped() {
         filePattern = null;
         pathPattern = null;
+        clientFactory = null;
     }
 
     @Override
@@ -253,7 +270,11 @@ public class ListAzureDataLakeStorage extends AbstractListAzureProcessor<ADLSFil
             final Pattern filePattern = listingMode == ListingMode.EXECUTION ? this.filePattern : getPattern(context, FILE_FILTER);
             final Pattern pathPattern = listingMode == ListingMode.EXECUTION ? this.pathPattern : getPattern(context, PATH_FILTER);
 
-            final DataLakeServiceClient storageClient = getStorageClient(context, null);
+            final ADLSCredentialsService credentialsService = context.getProperty(ADLS_CREDENTIALS_SERVICE).asControllerService(ADLSCredentialsService.class);
+
+            final ADLSCredentialsDetails credentialsDetails = credentialsService.getCredentialsDetails(Collections.emptyMap());
+
+            final DataLakeServiceClient storageClient = clientFactory.getStorageClient(credentialsDetails);
             final DataLakeFileSystemClient fileSystemClient = storageClient.getFileSystemClient(fileSystem);
 
             final ListPathsOptions options = new ListPathsOptions();
@@ -261,10 +282,12 @@ public class ListAzureDataLakeStorage extends AbstractListAzureProcessor<ADLSFil
             options.setRecursive(recurseSubdirectories);
 
             final Pattern baseDirectoryPattern = Pattern.compile("^" + baseDirectory + "/?");
+            final boolean includeTempFiles = context.getProperty(INCLUDE_TEMPORARY_FILES).asBoolean();
             final long minimumTimestamp = minTimestamp == null ? 0 : minTimestamp;
 
             final List<ADLSFileInfo> listing = fileSystemClient.listPaths(options, null).stream()
                     .filter(pathItem -> !pathItem.isDirectory())
+                    .filter(pathItem -> includeTempFiles || !pathItem.getName().contains(TEMP_FILE_DIRECTORY))
                     .filter(pathItem -> isFileInfoMatchesWithAgeAndSize(context, minimumTimestamp, pathItem.getLastModified().toInstant().toEpochMilli(), pathItem.getContentLength()))
                     .map(pathItem -> new ADLSFileInfo.Builder()
                             .fileSystem(fileSystem)

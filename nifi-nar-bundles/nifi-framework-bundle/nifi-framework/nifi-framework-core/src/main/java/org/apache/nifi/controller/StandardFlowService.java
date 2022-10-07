@@ -303,7 +303,7 @@ public class StandardFlowService implements FlowService, ProtocolHandler {
                     c2NifiClientService = new C2NifiClientService(nifiProperties, this.controller);
                     c2NifiClientService.start();
                 } else {
-                    logger.info("C2 Property [{}] missing or disabled: C2 client not created", C2NiFiProperties.C2_ENABLE_KEY);
+                    logger.debug("C2 Property [{}] missing or disabled: C2 client not created", C2NiFiProperties.C2_ENABLE_KEY);
                     c2NifiClientService = null;
                 }
             }
@@ -639,6 +639,8 @@ public class StandardFlowService implements FlowService, ProtocolHandler {
         flowManager.getRootGroup().findAllProcessors().stream().filter(AbstractComponentNode::isExtensionMissing).forEach(p -> missingComponents.add(p.getIdentifier()));
         flowManager.getAllControllerServices().stream().filter(ComponentNode::isExtensionMissing).forEach(cs -> missingComponents.add(cs.getIdentifier()));
         controller.getAllReportingTasks().stream().filter(ComponentNode::isExtensionMissing).forEach(r -> missingComponents.add(r.getIdentifier()));
+        controller.getFlowManager().getAllParameterProviders().stream().filter(ComponentNode::isExtensionMissing).forEach(r -> missingComponents.add(r.getIdentifier()));
+        controller.getFlowManager().getAllFlowRegistryClients().stream().filter(ComponentNode::isExtensionMissing).forEach(c -> missingComponents.add(c.getIdentifier()));
 
         return new StandardDataFlow(flowBytes, snippetBytes, authorizerFingerprint, missingComponents);
     }

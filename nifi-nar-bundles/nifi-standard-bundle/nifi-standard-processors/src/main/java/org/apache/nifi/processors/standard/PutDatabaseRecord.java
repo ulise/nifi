@@ -84,6 +84,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.ServiceLoader;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -479,10 +480,13 @@ public class PutDatabaseRecord extends AbstractProcessor {
         }
 
         final DBCPService dbcpService = context.getProperty(DBCP_SERVICE).asControllerService(DBCPService.class);
-        final Connection connection = dbcpService.getConnection(flowFile.getAttributes());
+        Optional<Connection> connectionHolder = Optional.empty();
 
         boolean originalAutoCommit = false;
         try {
+            final Connection connection = dbcpService.getConnection(flowFile.getAttributes());
+            connectionHolder = Optional.of(connection);
+
             originalAutoCommit = connection.getAutoCommit();
             connection.setAutoCommit(false);
 
@@ -513,25 +517,31 @@ public class PutDatabaseRecord extends AbstractProcessor {
                 session.transfer(flowFile, relationship);
             }
 
-            try {
-                connection.rollback();
-            } catch (final Exception e1) {
-                getLogger().error("Failed to rollback JDBC transaction", e1);
-            }
+            connectionHolder.ifPresent(connection -> {
+                try {
+                    connection.rollback();
+                } catch (final Exception rollbackException) {
+                    getLogger().error("Failed to rollback JDBC transaction", rollbackException);
+                }
+            });
         } finally {
             if (originalAutoCommit) {
-                try {
-                    connection.setAutoCommit(true);
-                } catch (final Exception e) {
-                    getLogger().warn("Failed to set auto-commit back to true on connection {} after finishing update", connection);
-                }
+                connectionHolder.ifPresent(connection -> {
+                    try {
+                        connection.setAutoCommit(true);
+                    } catch (final Exception autoCommitException) {
+                        getLogger().warn("Failed to set auto-commit back to true on connection", autoCommitException);
+                    }
+                });
             }
 
-            try {
-                connection.close();
-            } catch (final Exception e) {
-                getLogger().warn("Failed to close database connection", e);
-            }
+            connectionHolder.ifPresent(connection -> {
+                try {
+                    connection.close();
+                } catch (final Exception closeException) {
+                    getLogger().warn("Failed to close database connection", closeException);
+                }
+            });
         }
     }
 
@@ -667,6 +677,8 @@ public class PutDatabaseRecord extends AbstractProcessor {
                             throw new IllegalArgumentException(format("Statement Type %s is not valid, FlowFile %s", statementType, flowFile));
                         }
 
+                        // Log debug sqlHolder
+                        log.debug("Generated SQL: {}", sqlHolder.getSql());
                         // Create the Prepared Statement
                         final PreparedStatement preparedStatement = con.prepareStatement(sqlHolder.getSql());
 
@@ -940,7 +952,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
         }
     }
 
-    private String generateTableName(final DMLSettings settings, final String catalog, final String schemaName, final String tableName, final TableSchema tableSchema) {
+    String generateTableName(final DMLSettings settings, final String catalog, final String schemaName, final String tableName, final TableSchema tableSchema) {
         final StringBuilder tableNameBuilder = new StringBuilder();
         if (catalog != null) {
             if (settings.quoteTableName) {
@@ -1200,6 +1212,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
             for (int i = 0; i < fieldCount; i++) {
                 RecordField field = recordSchema.getField(i);
                 String fieldName = field.getFieldName();
+                boolean firstUpdateKey = true;
 
                 final String normalizedColName = normalizeColumnName(fieldName, settings.translateFieldNames);
                 final ColumnDescription desc = tableSchema.getColumns().get(normalizeColumnName(fieldName, settings.translateFieldNames));
@@ -1210,9 +1223,10 @@ public class PutDatabaseRecord extends AbstractProcessor {
 
                         if (whereFieldCount.getAndIncrement() > 0) {
                             sqlBuilder.append(" AND ");
-                        } else if (i == 0) {
+                        } else if (firstUpdateKey) {
                             // Set the WHERE clause based on the Update Key values
                             sqlBuilder.append(" WHERE ");
+                            firstUpdateKey = false;
                         }
 
                         if (settings.escapeColumnNames) {
@@ -1385,7 +1399,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
         private Map<String, ColumnDescription> columns;
         private String quotedIdentifierString;
 
-        private TableSchema(final List<ColumnDescription> columnDescriptions, final boolean translateColumnNames,
+        TableSchema(final List<ColumnDescription> columnDescriptions, final boolean translateColumnNames,
                             final Set<String> primaryKeyColumnNames, final String quotedIdentifierString) {
             this.columns = new LinkedHashMap<>();
             this.primaryKeyColumnNames = primaryKeyColumnNames;
@@ -1674,7 +1688,7 @@ public class PutDatabaseRecord extends AbstractProcessor {
         // Quote table name?
         private final boolean quoteTableName;
 
-        private DMLSettings(ProcessContext context) {
+        DMLSettings(ProcessContext context) {
             translateFieldNames = context.getProperty(TRANSLATE_FIELD_NAMES).asBoolean();
             ignoreUnmappedFields = IGNORE_UNMATCHED_FIELD.getValue().equalsIgnoreCase(context.getProperty(UNMATCHED_FIELD_BEHAVIOR).getValue());
 

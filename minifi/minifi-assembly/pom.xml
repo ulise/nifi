@@ -20,7 +20,7 @@ limitations under the License.
     <parent>
         <artifactId>minifi</artifactId>
         <groupId>org.apache.nifi.minifi</groupId>
-        <version>1.17.0-SNAPSHOT</version>
+        <version>1.19.0-SNAPSHOT</version>
     </parent>
     <artifactId>minifi-assembly</artifactId>
     <packaging>pom</packaging>
@@ -128,13 +128,13 @@ limitations under the License.
         <dependency>
             <groupId>org.apache.nifi.minifi</groupId>
             <artifactId>minifi-framework-nar</artifactId>
-            <version>1.17.0-SNAPSHOT</version>
+            <version>1.19.0-SNAPSHOT</version>
             <type>nar</type>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi.minifi</groupId>
             <artifactId>minifi-server-nar</artifactId>
-            <version>1.17.0-SNAPSHOT</version>
+            <version>1.19.0-SNAPSHOT</version>
             <type>nar</type>
         </dependency>
         <dependency>
@@ -175,6 +175,51 @@ limitations under the License.
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-standard-services-api-nar</artifactId>
+            <type>nar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-record-serialization-services-nar</artifactId>
+            <type>nar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-dbcp-service-nar</artifactId>
+            <type>nar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-distributed-cache-services-nar</artifactId>
+            <type>nar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-distributed-cache-services-nar</artifactId>
+            <type>nar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-proxy-configuration-nar</artifactId>
+            <type>nar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-http-context-map-nar</artifactId>
+            <type>nar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-oauth2-provider-nar</artifactId>
+            <type>nar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-lookup-services-nar</artifactId>
+            <type>nar</type>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.nifi</groupId>
+            <artifactId>nifi-registry-nar</artifactId>
             <type>nar</type>
         </dependency>
         <dependency>
@@ -220,6 +265,24 @@ limitations under the License.
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+
+        <!-- dependencies for jaxb/activation/annotation for running MiNiFi on Java 11 -->
+        <!-- TODO: remove these once minimum Java version is 11 -->
+        <dependency>
+            <groupId>jakarta.xml.bind</groupId>
+            <artifactId>jakarta.xml.bind-api</artifactId>
+            <version>${jakarta.xml.bind-api.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.glassfish.jaxb</groupId>
+            <artifactId>jaxb-runtime</artifactId>
+            <version>${jaxb.runtime.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>javax.annotation</groupId>
+            <artifactId>javax.annotation-api</artifactId>
+            <version>${javax.annotation-api.version}</version>
         </dependency>
     </dependencies>
 

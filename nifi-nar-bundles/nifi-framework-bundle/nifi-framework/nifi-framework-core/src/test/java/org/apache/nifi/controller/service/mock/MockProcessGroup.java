@@ -32,6 +32,7 @@ import org.apache.nifi.controller.Template;
 import org.apache.nifi.controller.flow.FlowManager;
 import org.apache.nifi.controller.label.Label;
 import org.apache.nifi.controller.queue.DropFlowFileStatus;
+import org.apache.nifi.controller.queue.QueueSize;
 import org.apache.nifi.controller.service.ControllerServiceNode;
 import org.apache.nifi.flow.VersionedExternalFlow;
 import org.apache.nifi.groups.BatchCounts;
@@ -47,7 +48,6 @@ import org.apache.nifi.groups.RemoteProcessGroup;
 import org.apache.nifi.parameter.ParameterContext;
 import org.apache.nifi.parameter.ParameterUpdate;
 import org.apache.nifi.registry.VariableRegistry;
-import org.apache.nifi.registry.flow.FlowRegistryClient;
 import org.apache.nifi.registry.flow.VersionControlInformation;
 import org.apache.nifi.registry.flow.mapping.FlowMappingOptions;
 import org.apache.nifi.registry.variable.MutableVariableRegistry;
@@ -711,7 +711,7 @@ public class MockProcessGroup implements ProcessGroup {
     }
 
     @Override
-    public void synchronizeWithFlowRegistry(FlowRegistryClient flowRegistry) {
+    public void synchronizeWithFlowRegistry(FlowManager flowRegistry) {
     }
 
     @Override
@@ -851,6 +851,11 @@ public class MockProcessGroup implements ProcessGroup {
     @Override
     public void setDefaultBackPressureDataSizeThreshold(String defaultBackPressureDataSizeThreshold) {
         this.defaultBackPressureDataSizeThreshold = defaultBackPressureDataSizeThreshold;
+    }
+
+    @Override
+    public QueueSize getQueueSize() {
+        return null;
     }
 
     @Override

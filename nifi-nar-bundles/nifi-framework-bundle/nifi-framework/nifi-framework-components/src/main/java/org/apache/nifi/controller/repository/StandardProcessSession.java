@@ -348,17 +348,22 @@ public class StandardProcessSession implements ProcessSession, ProvenanceEventEn
                     }
                 }
             } else {
-                final Connection finalDestination = destinations.remove(destinations.size() - 1); // remove last element
-                final FlowFileRecord currRec = record.getCurrent();
-                final StandardFlowFileRecord.Builder builder = new StandardFlowFileRecord.Builder().fromFlowFile(currRec);
-                builder.removeAttributes(retryAttribute);
+                FlowFileRecord currRec = record.getCurrent();
 
+                // If there's a retry attribute present, remove it. The attribute should only live while the FlowFile is being processed by the current component
+                if (currRec.getAttribute(retryAttribute) != null) {
+                    currRec = new StandardFlowFileRecord.Builder().fromFlowFile(currRec).removeAttributes(retryAttribute).build();
+                    record.setWorking(currRec, retryAttribute, null, false);
+                }
+
+                final Connection finalDestination = destinations.remove(destinations.size() - 1); // remove last element
                 record.setDestination(finalDestination.getFlowFileQueue());
-                record.setWorking(builder.build(), false);
                 incrementConnectionInputCounts(finalDestination, record);
 
                 for (final Connection destination : destinations) { // iterate over remaining destinations and "clone" as needed
                     incrementConnectionInputCounts(destination, record);
+
+                    final StandardFlowFileRecord.Builder builder = new StandardFlowFileRecord.Builder().fromFlowFile(currRec);
                     builder.id(context.getNextFlowFileSequence());
 
                     final String newUuid = UUID.randomUUID().toString();
@@ -372,7 +377,7 @@ public class StandardProcessSession implements ProcessSession, ProvenanceEventEn
                     if (claim != null) {
                         context.getContentRepository().incrementClaimaintCount(claim);
                     }
-                    newRecord.setWorking(clone, Collections.<String, String>emptyMap(), false);
+                    newRecord.setWorking(clone, Collections.emptyMap(), false);
 
                     newRecord.setDestination(destination.getFlowFileQueue());
                     newRecord.setTransferRelationship(record.getTransferRelationship());
@@ -599,7 +604,7 @@ public class StandardProcessSession implements ProcessSession, ProvenanceEventEn
             final long flowFileRepoUpdateFinishNanos = System.nanoTime();
             final long flowFileRepoUpdateNanos = flowFileRepoUpdateFinishNanos - flowFileRepoUpdateStart;
 
-            if (LOG.isInfoEnabled()) {
+            if (LOG.isDebugEnabled()) {
                 for (final RepositoryRecord record : checkpoint.records.values()) {
                     if (record.isMarkedForAbort()) {
                         final FlowFileRecord flowFile = record.getCurrent();
@@ -651,7 +656,7 @@ public class StandardProcessSession implements ProcessSession, ProvenanceEventEn
             }
             checkpoint.deleteOnCommit.clear();
 
-            if (LOG.isInfoEnabled()) {
+            if (LOG.isDebugEnabled()) {
                 final String sessionSummary = summarizeEvents(checkpoint);
                 if (!sessionSummary.isEmpty()) {
                     LOG.debug("{} for {}, committed the following events: {}", this, connectableDescription, sessionSummary);

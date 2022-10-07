@@ -18,16 +18,15 @@
     <parent>
         <groupId>org.apache.nifi</groupId>
         <artifactId>nifi-manifest</artifactId>
-        <version>1.17.0-SNAPSHOT</version>
+        <version>1.19.0-SNAPSHOT</version>
     </parent>
     <artifactId>nifi-extension-manifest-model</artifactId>
     <packaging>jar</packaging>
 
     <dependencies>
-	<dependency>
+	    <dependency>
             <groupId>io.swagger</groupId>
             <artifactId>swagger-annotations</artifactId>
-	    <version>1.5.16</version>
         </dependency>
         <dependency>
             <groupId>javax.validation</groupId>

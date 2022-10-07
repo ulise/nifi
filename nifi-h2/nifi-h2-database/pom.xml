@@ -14,7 +14,7 @@
     <parent>
         <groupId>org.apache.nifi</groupId>
         <artifactId>nifi-h2</artifactId>
-        <version>1.17.0-SNAPSHOT</version>
+        <version>1.19.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>nifi-h2-database</artifactId>
@@ -60,6 +60,30 @@
                                     <shadedPattern>org.apache.nifi.org.h2</shadedPattern>
                                 </relocation>
                             </relocations>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.0.0</version>
+                <executions>
+                    <execution>
+                        <id>attach-shade-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>attach-artifact</goal>
+                        </goals>
+                        <configuration>
+                            <artifacts>
+                                <artifact>
+                                    <file>${basedir}/target/${project.build.finalName}.jar</file>
+                                    <type>jar</type>
+                                    <classifier>shaded</classifier>
+                                </artifact>
+                            </artifacts>
+                            <skipAttach>true</skipAttach>
                         </configuration>
                     </execution>
                 </executions>

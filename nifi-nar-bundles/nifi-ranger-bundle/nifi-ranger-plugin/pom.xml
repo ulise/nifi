@@ -19,7 +19,7 @@
     <parent>
         <groupId>org.apache.nifi</groupId>
         <artifactId>nifi-ranger-bundle</artifactId>
-        <version>1.17.0-SNAPSHOT</version>
+        <version>1.19.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>nifi-ranger-plugin</artifactId>
@@ -195,12 +195,12 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-xml-processing</artifactId>
-            <version>1.17.0-SNAPSHOT</version>
+            <version>1.19.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-mock</artifactId>
-            <version>1.17.0-SNAPSHOT</version>
+            <version>1.19.0-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -212,6 +212,18 @@
     </dependencies>
 
     <profiles>
+        <!-- Disable tests on AArch64 which does not have necessary platform-specific libraries -->
+        <profile>
+            <id>disable-ranger-tests</id>
+            <activation>
+                <os>
+                    <arch>aarch64</arch>
+                </os>
+            </activation>
+            <properties>
+                <skipTests>true</skipTests>
+            </properties>
+        </profile>
         <!-- Includes hadoop-aws for accessing HDFS with an s3a:// filesystem -->
         <profile>
             <id>include-hadoop-aws</id>

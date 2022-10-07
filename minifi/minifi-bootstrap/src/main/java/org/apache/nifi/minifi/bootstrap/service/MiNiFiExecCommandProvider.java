@@ -18,6 +18,7 @@
 package org.apache.nifi.minifi.bootstrap.service;
 
 import static org.apache.nifi.minifi.bootstrap.RunMiNiFi.CONF_DIR_KEY;
+import static org.apache.nifi.minifi.bootstrap.RunMiNiFi.DEFAULT_LOGGER;
 
 import java.io.File;
 import java.io.IOException;
@@ -26,11 +27,23 @@ import java.util.List;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.Properties;
+import org.apache.nifi.bootstrap.util.OSUtils;
 
 public class MiNiFiExecCommandProvider {
 
+    public static final String LOG_DIR = "org.apache.nifi.minifi.bootstrap.config.log.dir";
+    public static final String DEFAULT_LOG_DIR = "./logs";
+
+    public static final String APP_LOG_FILE_NAME = "org.apache.nifi.minifi.bootstrap.config.log.app.file.name";
+    public static final String APP_LOG_FILE_EXTENSION = "org.apache.nifi.minifi.bootstrap.config.log.app.file.extension";
+    public static final String BOOTSTRAP_LOG_FILE_NAME = "org.apache.nifi.minifi.bootstrap.config.log.bootstrap.file.name";
+    public static final String BOOTSTRAP_LOG_FILE_EXTENSION = "org.apache.nifi.minifi.bootstrap.config.log.bootstrap.file.extension";
+    public static final String DEFAULT_APP_LOG_FILE_NAME = "minifi-app";
+    public static final String DEFAULT_BOOTSTRAP_LOG_FILE_NAME = "minifi-bootstrap";
+    public static final String DEFAULT_LOG_FILE_EXTENSION = "log";
+
+
     private static final String DEFAULT_JAVA_CMD = "java";
-    private static final String DEFAULT_LOG_DIR = "./logs";
     private static final String DEFAULT_LIB_DIR = "./lib";
     private static final String DEFAULT_CONF_DIR = "./conf";
     private static final String DEFAULT_CONFIG_FILE = DEFAULT_CONF_DIR + "/bootstrap.conf";
@@ -54,7 +67,11 @@ public class MiNiFiExecCommandProvider {
         Properties props = bootstrapFileProvider.getBootstrapProperties();
         File confDir = getFile(props.getProperty(CONF_DIR_KEY, DEFAULT_CONF_DIR).trim(), workingDir);
         File libDir = getFile(props.getProperty("lib.dir", DEFAULT_LIB_DIR).trim(), workingDir);
-        String minifiLogDir = System.getProperty("org.apache.nifi.minifi.bootstrap.config.log.dir", DEFAULT_LOG_DIR).trim();
+        String minifiLogDir = System.getProperty(LOG_DIR, DEFAULT_LOG_DIR).trim();
+        String minifiAppLogFileName = System.getProperty(APP_LOG_FILE_NAME, DEFAULT_APP_LOG_FILE_NAME).trim();
+        String minifiAppLogFileExtension = System.getProperty(APP_LOG_FILE_EXTENSION, DEFAULT_LOG_FILE_EXTENSION).trim();
+        String minifiBootstrapLogFileName = System.getProperty(BOOTSTRAP_LOG_FILE_NAME, DEFAULT_BOOTSTRAP_LOG_FILE_NAME).trim();
+        String minifiBootstrapLogFileExtension = System.getProperty(BOOTSTRAP_LOG_FILE_EXTENSION, DEFAULT_LOG_FILE_EXTENSION).trim();
 
         List<String> cmd = new ArrayList<>();
         cmd.add(getJavaCommand(props));
@@ -64,7 +81,11 @@ public class MiNiFiExecCommandProvider {
         cmd.add("-Dnifi.properties.file.path=" + getMiNiFiPropsFileName(props, confDir));
         cmd.add("-Dnifi.bootstrap.listen.port=" + listenPort);
         cmd.add("-Dapp=MiNiFi");
-        cmd.add("-Dorg.apache.nifi.minifi.bootstrap.config.log.dir=" + minifiLogDir);
+        cmd.add("-D" + LOG_DIR + "=" + minifiLogDir);
+        cmd.add("-D" + APP_LOG_FILE_NAME + "=" + minifiAppLogFileName);
+        cmd.add("-D" + APP_LOG_FILE_EXTENSION + "=" + minifiAppLogFileExtension);
+        cmd.add("-D" + BOOTSTRAP_LOG_FILE_NAME + "=" + minifiBootstrapLogFileName);
+        cmd.add("-D" + BOOTSTRAP_LOG_FILE_EXTENSION + "=" + minifiBootstrapLogFileExtension);
         cmd.add("org.apache.nifi.minifi.MiNiFi");
 
         return cmd;
@@ -109,6 +130,7 @@ public class MiNiFiExecCommandProvider {
         for (File file : libFiles) {
             cpFiles.add(file.getAbsolutePath());
         }
+        cpFiles.addAll(getJava11Files(libDir));
 
         StringBuilder classPathBuilder = new StringBuilder();
         for (int i = 0; i < cpFiles.size(); i++) {
@@ -120,6 +142,26 @@ public class MiNiFiExecCommandProvider {
         }
 
         return classPathBuilder.toString();
+    }
+
+    private List<String> getJava11Files(File libDir) {
+        List<String> java11Files = new ArrayList();
+        String runtimeJavaVersion = System.getProperty("java.version");
+        DEFAULT_LOGGER.info("Runtime Java version: {}", runtimeJavaVersion);
+        if (OSUtils.parseJavaVersion(runtimeJavaVersion) >= 11) {
+            /* If running on Java 11 or greater, add the JAXB/activation/annotation libs to the classpath.
+             *
+             * TODO: Once the minimum Java version requirement of NiFi is 11, this processing should be removed.
+             * JAXB/activation/annotation will be added as an actual dependency via pom.xml.
+             */
+            File libJava11Dir = getFile("java11", libDir);
+            if (libJava11Dir.exists()) {
+                for (File file : libJava11Dir.listFiles((dir, filename) -> filename.toLowerCase().endsWith(".jar"))) {
+                    java11Files.add(file.getAbsolutePath());
+                }
+            }
+        }
+        return java11Files;
     }
 
     private List<String> getJavaAdditionalArgs(Properties props) {

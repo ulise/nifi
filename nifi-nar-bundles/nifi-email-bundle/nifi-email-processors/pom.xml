@@ -19,7 +19,7 @@
     <parent>
         <groupId>org.apache.nifi</groupId>
         <artifactId>nifi-email-bundle</artifactId>
-        <version>1.17.0-SNAPSHOT</version>
+        <version>1.19.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>nifi-email-processors</artifactId>
@@ -37,7 +37,7 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-utils</artifactId>
-            <version>1.17.0-SNAPSHOT</version>
+            <version>1.19.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>javax.mail</groupId>
@@ -122,13 +122,13 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-mock</artifactId>
-            <version>1.17.0-SNAPSHOT</version>
+            <version>1.19.0-SNAPSHOT</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>com.icegreen</groupId>
             <artifactId>greenmail</artifactId>
-            <version>1.5.11</version>
+            <version>1.6.10</version>
             <scope>test</scope>
         </dependency>
         <dependency>

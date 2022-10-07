@@ -371,7 +371,7 @@ public abstract class ApplicationResource {
      */
     protected boolean isTwoPhaseRequest(final HttpServletRequest httpServletRequest) {
         final String transactionId = httpServletRequest.getHeader(RequestReplicator.REQUEST_TRANSACTION_ID_HEADER);
-        return transactionId != null && isConnectedToCluster();
+        return transactionId != null && isClustered();
     }
 
     /**
@@ -914,6 +914,15 @@ public abstract class ApplicationResource {
         }
 
         throw new NoClusterCoordinatorException();
+    }
+
+    protected Optional<NodeIdentifier> getPrimaryNodeId() {
+        final ClusterCoordinator coordinator = getClusterCoordinator();
+        if (coordinator == null) {
+            throw new NoClusterCoordinatorException();
+        }
+
+        return Optional.ofNullable(coordinator.getPrimaryNode());
     }
 
     protected ReplicationTarget getReplicationTarget() {

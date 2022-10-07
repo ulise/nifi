@@ -7,8 +7,8 @@
     "privPassphrase":"abc12345"
   },
   {
-    "securityName":"newUser2",
-    "authProtocol":"MD5",
+    "securityName":"user2",
+    "authProtocol":"SHA",
     "authPassphrase":"abc12345",
     "privProtocol":"AES256",
     "privPassphrase":"abc12345"

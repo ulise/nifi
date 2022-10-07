@@ -18,7 +18,7 @@
     <parent>
         <groupId>org.apache.nifi</groupId>
         <artifactId>nifi-toolkit</artifactId>
-        <version>1.17.0-SNAPSHOT</version>
+        <version>1.19.0-SNAPSHOT</version>
     </parent>
     <artifactId>nifi-toolkit-cli</artifactId>
     <description>Tooling to make tls configuration easier</description>
@@ -57,7 +57,7 @@
         <dependency>
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-client-dto</artifactId>
-            <version>1.17.0-SNAPSHOT</version>
+            <version>1.19.0-SNAPSHOT</version>
             <exclusions>
                 <exclusion>
                     <groupId>ch.qos.logback</groupId>
@@ -80,11 +80,6 @@
             <groupId>org.apache.nifi</groupId>
             <artifactId>nifi-security-kerberos</artifactId>
             <version>${project.version}</version>
-        </dependency>
-        <dependency>
-            <groupId>org.apache.nifi.registry</groupId>
-            <artifactId>nifi-registry-client</artifactId>
-            <version>1.17.0-SNAPSHOT</version>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -119,7 +114,7 @@
         <dependency>
             <groupId>com.opencsv</groupId>
             <artifactId>opencsv</artifactId>
-            <version>5.4</version>
+            <version>5.7.0</version>
             <exclusions>
                 <exclusion>
                     <groupId>commons-logging</groupId>

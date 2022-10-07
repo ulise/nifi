@@ -17,10 +17,24 @@
 
 package org.apache.nifi.minifi.bootstrap.util;
 
+import static org.apache.nifi.minifi.bootstrap.configuration.ingestors.PullHttpChangeIngestor.OVERRIDE_SECURITY;
+import static org.apache.nifi.minifi.bootstrap.configuration.ingestors.PullHttpChangeIngestor.PULL_HTTP_BASE_KEY;
+import static org.apache.nifi.minifi.bootstrap.service.MiNiFiExecCommandProvider.APP_LOG_FILE_EXTENSION;
+import static org.apache.nifi.minifi.bootstrap.service.MiNiFiExecCommandProvider.APP_LOG_FILE_NAME;
+import static org.apache.nifi.minifi.bootstrap.service.MiNiFiExecCommandProvider.BOOTSTRAP_LOG_FILE_EXTENSION;
+import static org.apache.nifi.minifi.bootstrap.service.MiNiFiExecCommandProvider.BOOTSTRAP_LOG_FILE_NAME;
+import static org.apache.nifi.minifi.bootstrap.service.MiNiFiExecCommandProvider.DEFAULT_APP_LOG_FILE_NAME;
+import static org.apache.nifi.minifi.bootstrap.service.MiNiFiExecCommandProvider.DEFAULT_BOOTSTRAP_LOG_FILE_NAME;
+import static org.apache.nifi.minifi.bootstrap.service.MiNiFiExecCommandProvider.DEFAULT_LOG_DIR;
+import static org.apache.nifi.minifi.bootstrap.service.MiNiFiExecCommandProvider.DEFAULT_LOG_FILE_EXTENSION;
+import static org.apache.nifi.minifi.bootstrap.service.MiNiFiExecCommandProvider.LOG_DIR;
+
+import java.io.ByteArrayInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.StringWriter;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -42,8 +56,10 @@ import javax.xml.transform.stream.StreamResult;
 import org.apache.commons.io.input.TeeInputStream;
 import org.apache.commons.io.output.ByteArrayOutputStream;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.nifi.minifi.bootstrap.RunMiNiFi;
 import org.apache.nifi.minifi.bootstrap.configuration.ConfigurationChangeException;
 import org.apache.nifi.minifi.bootstrap.exception.InvalidConfigurationException;
+import org.apache.nifi.minifi.bootstrap.service.BootstrapFileProvider;
 import org.apache.nifi.minifi.commons.schema.ComponentStatusRepositorySchema;
 import org.apache.nifi.minifi.commons.schema.ConfigSchema;
 import org.apache.nifi.minifi.commons.schema.ConnectionSchema;
@@ -82,10 +98,17 @@ public final class ConfigTransformer {
     // Underlying version of NIFI will be using
     public static final String ROOT_GROUP = "Root-Group";
 
+    static final String MINIFI_CONFIG_FILE_PATH = "nifi.minifi.config.file";
+    static final String MINIFI_BOOTSTRAP_FILE_PATH = "nifi.minifi.bootstrap.file";
+    static final String MINIFI_LOG_DIRECTORY = "nifi.minifi.log.directory";
+    static final String MINIFI_APP_LOG_FILE = "nifi.minifi.app.log.file";
+    static final String MINIFI_BOOTSTRAP_LOG_FILE = "nifi.minifi.bootstrap.log.file";
+
+    private static final Logger LOGGER = LoggerFactory.getLogger(ConfigTransformer.class);
+
+    private static final String OVERRIDE_CORE_PROPERTIES_KEY = PULL_HTTP_BASE_KEY + ".override.core";
     private static final Base64.Encoder KEY_ENCODER = Base64.getEncoder().withoutPadding();
     private static final int SENSITIVE_PROPERTIES_KEY_LENGTH = 24;
-
-    public static final Logger logger = LoggerFactory.getLogger(ConfigTransformer.class);
 
     // Final util classes should have private constructor
     private ConfigTransformer() {
@@ -119,19 +142,19 @@ public final class ConfigTransformer {
         // See if we are providing defined properties from the filesystem configurations and use those as the definitive values
         if (securityProperties != null) {
             configSchemaNew.setSecurityProperties(securityProperties);
-            logger.info("Bootstrap flow override: Replaced security properties");
+            LOGGER.info("Bootstrap flow override: Replaced security properties");
         }
 
         if (provenanceReportingProperties != null) {
             configSchemaNew.setProvenanceReportingProperties(provenanceReportingProperties);
-            logger.info("Bootstrap flow override: Replaced provenance reporting properties");
+            LOGGER.info("Bootstrap flow override: Replaced provenance reporting properties");
         }
 
         // Replace all processor SSL controller services with MiNiFi parent, if bootstrap boolean is set to true
         if (BootstrapTransformer.processorSSLOverride(bootstrapProperties)) {
             for (ProcessorSchema processorConfig : configSchemaNew.getProcessGroupSchema().getProcessors()) {
                 processorConfig.getProperties().replace("SSL Context Service", processorConfig.getProperties().get("SSL Context Service"), "SSL-Context-Service");
-                logger.info("Bootstrap flow override: Replaced {} SSL Context Service with parent MiNiFi SSL", processorConfig.getName());
+                LOGGER.info("Bootstrap flow override: Replaced {} SSL Context Service with parent MiNiFi SSL", processorConfig.getName());
             }
         }
 
@@ -141,6 +164,17 @@ public final class ConfigTransformer {
             .stream()
             .filter(entry -> ((String) entry.getKey()).startsWith("c2"))
             .forEach(entry -> configSchemaNew.getNifiPropertiesOverrides().putIfAbsent((String) entry.getKey(), (String) entry.getValue()));
+
+        // Config files and log files
+        if (bootstrapProperties != null) {
+            configSchemaNew.getNifiPropertiesOverrides().putIfAbsent(MINIFI_CONFIG_FILE_PATH, bootstrapProperties.getProperty(RunMiNiFi.MINIFI_CONFIG_FILE_KEY));
+        }
+        configSchemaNew.getNifiPropertiesOverrides().putIfAbsent(MINIFI_BOOTSTRAP_FILE_PATH, BootstrapFileProvider.getBootstrapConfFile().getAbsolutePath());
+        configSchemaNew.getNifiPropertiesOverrides().putIfAbsent(MINIFI_LOG_DIRECTORY, System.getProperty(LOG_DIR, DEFAULT_LOG_DIR).trim());
+        configSchemaNew.getNifiPropertiesOverrides().putIfAbsent(MINIFI_APP_LOG_FILE,
+            System.getProperty(APP_LOG_FILE_NAME, DEFAULT_APP_LOG_FILE_NAME).trim() + "." +  System.getProperty(APP_LOG_FILE_EXTENSION, DEFAULT_LOG_FILE_EXTENSION).trim());
+        configSchemaNew.getNifiPropertiesOverrides().putIfAbsent(MINIFI_BOOTSTRAP_LOG_FILE,
+            System.getProperty(BOOTSTRAP_LOG_FILE_NAME, DEFAULT_BOOTSTRAP_LOG_FILE_NAME).trim() + "." +  System.getProperty(BOOTSTRAP_LOG_FILE_EXTENSION, DEFAULT_LOG_FILE_EXTENSION).trim());
 
         // Create nifi.properties and flow.xml.gz in memory
         ByteArrayOutputStream nifiPropertiesOutputStream = new ByteArrayOutputStream();
@@ -286,7 +320,7 @@ public final class ConfigTransformer {
             final String notnullSensitivePropertiesKey;
             // Auto-generate the sensitive properties key if not provided, NiFi security libraries require it
             if (StringUtil.isNullOrEmpty(sensitivePropertiesKey)) {
-                logger.warn("Generating Random Sensitive Properties Key [{}]", NiFiProperties.SENSITIVE_PROPS_KEY);
+                LOGGER.warn("Generating Random Sensitive Properties Key [{}]", NiFiProperties.SENSITIVE_PROPS_KEY);
                 final SecureRandom secureRandom = new SecureRandom();
                 final byte[] sensitivePropertiesKeyBinary = new byte[SENSITIVE_PROPERTIES_KEY_LENGTH];
                 secureRandom.nextBytes(sensitivePropertiesKeyBinary);
@@ -748,6 +782,52 @@ public final class ConfigTransformer {
         final Element toAdd = doc.createElement(name);
         toAdd.setTextContent(value);
         element.appendChild(toAdd);
+    }
+
+    public static ByteBuffer overrideNonFlowSectionsFromOriginalSchema(byte[] newSchema, ByteBuffer currentConfigScheme, Properties bootstrapProperties)
+        throws InvalidConfigurationException {
+        try {
+            boolean overrideCoreProperties = ConfigTransformer.overrideCoreProperties(bootstrapProperties);
+            boolean overrideSecurityProperties = ConfigTransformer.overrideSecurityProperties(bootstrapProperties);
+            if (overrideCoreProperties && overrideSecurityProperties) {
+                return ByteBuffer.wrap(newSchema);
+            } else {
+                ConvertableSchema<ConfigSchema> schemaNew = ConfigTransformer
+                    .throwIfInvalid(SchemaLoader.loadConvertableSchemaFromYaml(new ByteArrayInputStream(newSchema)));
+                ConfigSchema configSchemaNew = ConfigTransformer.throwIfInvalid(schemaNew.convert());
+                ConvertableSchema<ConfigSchema> schemaOld = ConfigTransformer
+                    .throwIfInvalid(SchemaLoader.loadConvertableSchemaFromYaml(new ByteBufferInputStream(currentConfigScheme)));
+                ConfigSchema configSchemaOld = ConfigTransformer.throwIfInvalid(schemaOld.convert());
+
+                configSchemaNew.setNifiPropertiesOverrides(configSchemaOld.getNifiPropertiesOverrides());
+
+                if (!overrideCoreProperties) {
+                    LOGGER.debug("Preserving previous core properties...");
+                    configSchemaNew.setCoreProperties(configSchemaOld.getCoreProperties());
+                }
+
+                if (!overrideSecurityProperties) {
+                    LOGGER.debug("Preserving previous security properties...");
+                    configSchemaNew.setSecurityProperties(configSchemaOld.getSecurityProperties());
+                }
+
+                StringWriter writer = new StringWriter();
+                SchemaLoader.toYaml(configSchemaNew, writer);
+                return ByteBuffer.wrap(writer.toString().getBytes()).asReadOnlyBuffer();
+            }
+        } catch (Exception e) {
+            throw new InvalidConfigurationException("Loading the old and the new schema for merging was not successful", e);
+        }
+    }
+
+    private static boolean overrideSecurityProperties(Properties properties) {
+        String overrideSecurityProperties = (String) properties.getOrDefault(OVERRIDE_SECURITY, "false");
+        return Boolean.parseBoolean(overrideSecurityProperties);
+    }
+
+    private static boolean overrideCoreProperties(Properties properties) {
+        String overrideCoreProps = (String) properties.getOrDefault(OVERRIDE_CORE_PROPERTIES_KEY, "false");
+        return Boolean.parseBoolean(overrideCoreProps);
     }
 
     public static final String PROPERTIES_FILE_APACHE_2_0_LICENSE =

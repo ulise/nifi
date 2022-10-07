@@ -84,13 +84,13 @@ import org.apache.nifi.processor.ProcessContext;
 import org.apache.nifi.processor.StandardProcessContext;
 import org.apache.nifi.registry.ComponentVariableRegistry;
 import org.apache.nifi.registry.VariableDescriptor;
-import org.apache.nifi.registry.client.NiFiRegistryException;
-import org.apache.nifi.registry.flow.FlowRegistry;
-import org.apache.nifi.registry.flow.FlowRegistryClient;
+import org.apache.nifi.registry.flow.FlowRegistryClientContextFactory;
+import org.apache.nifi.registry.flow.FlowRegistryClientNode;
+import org.apache.nifi.registry.flow.FlowRegistryException;
+import org.apache.nifi.registry.flow.RegisteredFlow;
+import org.apache.nifi.registry.flow.RegisteredFlowSnapshot;
 import org.apache.nifi.registry.flow.StandardVersionControlInformation;
 import org.apache.nifi.registry.flow.VersionControlInformation;
-import org.apache.nifi.registry.flow.VersionedFlow;
-import org.apache.nifi.registry.flow.VersionedFlowSnapshot;
 import org.apache.nifi.registry.flow.VersionedFlowState;
 import org.apache.nifi.registry.flow.VersionedFlowStatus;
 import org.apache.nifi.registry.flow.diff.ComparableDataFlow;
@@ -138,6 +138,7 @@ import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
@@ -177,13 +178,12 @@ public final class StandardProcessGroup implements ProcessGroup {
     private final FlowManager flowManager;
     private final ExtensionManager extensionManager;
     private final StateManagerProvider stateManagerProvider;
-    private final FlowRegistryClient flowRegistryClient;
     private final ReloadComponent reloadComponent;
 
     private final Map<String, Port> inputPorts = new HashMap<>();
     private final Map<String, Port> outputPorts = new HashMap<>();
-    private final Map<String, Connection> connections = new HashMap<>();
-    private final Map<String, ProcessGroup> processGroups = new HashMap<>();
+    private final Map<String, Connection> connections = new ConcurrentHashMap<>();
+    private final Map<String, ProcessGroup> processGroups = new ConcurrentHashMap<>();
     private final Map<String, Label> labels = new HashMap<>();
     private final Map<String, RemoteProcessGroup> remoteGroups = new HashMap<>();
     private final Map<String, ProcessorNode> processors = new HashMap<>();
@@ -216,7 +216,7 @@ public final class StandardProcessGroup implements ProcessGroup {
 
     public StandardProcessGroup(final String id, final ControllerServiceProvider serviceProvider, final ProcessScheduler scheduler,
                                 final PropertyEncryptor encryptor, final ExtensionManager extensionManager,
-                                final StateManagerProvider stateManagerProvider, final FlowManager flowManager, final FlowRegistryClient flowRegistryClient,
+                                final StateManagerProvider stateManagerProvider, final FlowManager flowManager,
                                 final ReloadComponent reloadComponent, final MutableVariableRegistry variableRegistry, final NodeTypeProvider nodeTypeProvider,
                                 final NiFiProperties nifiProperties) {
 
@@ -230,7 +230,6 @@ public final class StandardProcessGroup implements ProcessGroup {
         this.stateManagerProvider = stateManagerProvider;
         this.variableRegistry = variableRegistry;
         this.flowManager = flowManager;
-        this.flowRegistryClient = flowRegistryClient;
         this.reloadComponent = reloadComponent;
         this.nodeTypeProvider = nodeTypeProvider;
 
@@ -612,6 +611,7 @@ public final class StandardProcessGroup implements ProcessGroup {
         try {
             // Unique port check within the same group.
             verifyPortUniqueness(port, inputPorts, this::getInputPortByName);
+            ensureUniqueVersionControlId(port, getInputPorts());
 
             port.setProcessGroup(this);
             inputPorts.put(requireNonNull(port).getIdentifier(), port);
@@ -695,6 +695,7 @@ public final class StandardProcessGroup implements ProcessGroup {
         try {
             // Unique port check within the same group.
             verifyPortUniqueness(port, outputPorts, this::getOutputPortByName);
+            ensureUniqueVersionControlId(port, getOutputPorts());
 
             port.setProcessGroup(this);
             outputPorts.put(port.getIdentifier(), port);
@@ -770,6 +771,8 @@ public final class StandardProcessGroup implements ProcessGroup {
 
         writeLock.lock();
         try {
+            ensureUniqueVersionControlId(group, getProcessGroups());
+
             group.setParent(this);
             group.getVariableRegistry().setParent(getVariableRegistry());
 
@@ -877,6 +880,7 @@ public final class StandardProcessGroup implements ProcessGroup {
                 throw new IllegalStateException("RemoteProcessGroup already exists with ID " + remoteGroup.getIdentifier());
             }
 
+            ensureUniqueVersionControlId(remoteGroup, getRemoteProcessGroups());
             remoteGroup.setProcessGroup(this);
             remoteGroups.put(Objects.requireNonNull(remoteGroup).getIdentifier(), remoteGroup);
             onComponentModified();
@@ -958,6 +962,8 @@ public final class StandardProcessGroup implements ProcessGroup {
                 throw new IllegalStateException("A processor is already registered to this ProcessGroup with ID " + processorId);
             }
 
+            ensureUniqueVersionControlId(processor, getProcessors());
+
             processor.setProcessGroup(this);
             processor.getVariableRegistry().setParent(getVariableRegistry());
             processors.put(processorId, processor);
@@ -970,6 +976,50 @@ public final class StandardProcessGroup implements ProcessGroup {
             writeLock.unlock();
         }
     }
+
+    /**
+     * A component's Versioned Component ID is used to link a component on the canvas to a component in a versioned flow.
+     * There may, however, be multiple instances of the same versioned flow in a single NiFi instance. In this case, we will have
+     * multiple components with the same Versioned Component ID. This is acceptable as long as no two components within the same Process Group
+     * have the same Versioned Component ID. However, it is not acceptable to have two components within the same Process Group that have the same
+     * Versioned Component ID. If this happens, we will have no way to know which component in our flow maps to which component in the versioned flow.
+     * We don't have an issue with this when a flow is imported, etc. because it is always imported to a new Process Group. However, because it's possible
+     * to move most components between groups, we can have a situation in which a component is moved to a higher group, and that can result in a conflict.
+     * In such a case, we handle this by nulling out the Versioned Component ID if there is a conflict. This essentially makes NiFi behave as if a component
+     * is copied & pasted instead of being moved whenever a conflict occurs.
+     *
+     * @param component the component whose Versioned Component ID should be nulled if there's a conflict
+     * @param componentsToCheck the components to check to determine if there's a conflict
+     */
+    private void ensureUniqueVersionControlId(final org.apache.nifi.components.VersionedComponent component,
+                                              final Collection<? extends org.apache.nifi.components.VersionedComponent> componentsToCheck) {
+        final Optional<String> optionalVersionControlId = component.getVersionedComponentId();
+        if (!optionalVersionControlId.isPresent()) {
+            return;
+        }
+
+        final String versionControlId = optionalVersionControlId.get();
+        final boolean duplicateId = containsVersionedComponentId(componentsToCheck, versionControlId);
+
+        if (duplicateId) {
+            LOG.debug("Adding {} to {}, found conflicting Version Component ID {} so marking Version Component ID of {} as null", component, this, versionControlId, component);
+            component.setVersionedComponentId(null);
+        } else {
+            LOG.debug("Adding {} to {}, found no conflicting Version Component ID for ID {}", component, this, versionControlId);
+        }
+    }
+
+    private boolean containsVersionedComponentId(final Collection<? extends org.apache.nifi.components.VersionedComponent> components, final String id) {
+        for (final org.apache.nifi.components.VersionedComponent component : components) {
+            final Optional<String> optionalConnectableId = component.getVersionedComponentId();
+            if (optionalConnectableId.isPresent() && Objects.equals(optionalConnectableId.get(), id)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
 
     /**
      * Looks for any property that is configured on the given component that references a Controller Service.
@@ -1146,45 +1196,79 @@ public final class StandardProcessGroup implements ProcessGroup {
             if (isInputPort(source)) { // if source is an input port, its destination must be in the same group unless it's an input port
                 if (isInputPort(destination)) { // if destination is input port, it must be in a child group.
                     if (!processGroups.containsKey(destinationGroup.getIdentifier())) {
-                        throw new IllegalStateException("Cannot add Connection to Process Group because destination is an Input Port that does not belong to a child Process Group");
+                        throw new IllegalStateException("Cannot add Connection for Input Port[" + source.getIdentifier() +
+                                "] from Process Group [" + sourceGroup.getIdentifier() +
+                                "] to Process Group [" + destinationGroup.getIdentifier() +
+                                "] because destination [" + destination.getIdentifier() +
+                                "] is an Input Port that does not belong to a child Process Group");
                     }
                 } else if (sourceGroup != this || destinationGroup != this) {
-                    throw new IllegalStateException("Cannot add Connection to Process Group because source and destination are not both in this Process Group");
+                    throw new IllegalStateException("Cannot add Connection for Input Port[" + source.getIdentifier() +
+                            "] from Process Group [" + sourceGroup.getIdentifier() +
+                            "] to Process Group [" + destinationGroup.getIdentifier() +
+                            "] destination [" + destination.getIdentifier() +
+                            "] because source and destination are not both in this Process Group");
                 }
             } else if (isOutputPort(source)) {
                 // if source is an output port, its group must be a child of this group, and its destination must be in this
                 // group (processor/output port) or a child group (input port)
                 if (!processGroups.containsKey(sourceGroup.getIdentifier())) {
-                    throw new IllegalStateException("Cannot add Connection to Process Group because source is an Output Port that does not belong to a child Process Group");
+                    throw new IllegalStateException("Cannot add Connection for Output Port[" + source.getIdentifier() +
+                            "] from Process Group [" + sourceGroup.getIdentifier() +
+                            "] to Process Group [" + destinationGroup.getIdentifier() +
+                            "] destination [" + destination.getIdentifier() +
+                            "] because source is an Output Port that does not belong to a child Process Group");
                 }
 
                 if (isInputPort(destination)) {
                     if (!processGroups.containsKey(destinationGroup.getIdentifier())) {
-                        throw new IllegalStateException("Cannot add Connection to Process Group because its destination is an Input Port that does not belong to a child Process Group");
+                        throw new IllegalStateException("Cannot add Connection for Output Port[" + source.getIdentifier() +
+                                "] from Process Group [" + sourceGroup.getIdentifier() +
+                                "] to Process Group [" + destinationGroup.getIdentifier() +
+                                "] because destination [" + destination.getIdentifier() +
+                                "] is an Input Port that does not belong to a child Process Group");
                     }
                 } else if (destinationGroup != this) {
-                    throw new IllegalStateException("Cannot add Connection to Process Group because its destination does not belong to this Process Group");
+                    throw new IllegalStateException("Cannot add Connection for Output Port[" + source.getIdentifier() +
+                            "] from Process Group [" + sourceGroup.getIdentifier() +
+                            "] to Process Group [" + destinationGroup.getIdentifier() +
+                            "] because its destination [" + destination.getIdentifier() +
+                            "] does not belong to this Process Group");
                 }
             } else { // source is not a port
                 if (sourceGroup != this) {
-                    throw new IllegalStateException("Cannot add Connection to Process Group because the source does not belong to this Process Group");
+                    throw new IllegalStateException("Cannot add Connection from " + source.getConnectableType().name() + "[" + source.getIdentifier() +
+                            "] from Process Group [" + sourceGroup.getIdentifier() +
+                            "] to Process Group [" + destinationGroup.getIdentifier() +
+                            "] because the source does not belong to this Process Group");
                 }
 
                 if (isOutputPort(destination)) {
                     if (destinationGroup != this) {
-                        throw new IllegalStateException("Cannot add Connection to Process Group because its destination is an Output Port but does not belong to this Process Group");
+                        throw new IllegalStateException("Cannot add Connection from " + source.getConnectableType().name() + "[" + source.getIdentifier() +
+                                "] from Process Group [" + sourceGroup.getIdentifier() +
+                                "] to Process Group [" + destinationGroup.getIdentifier() +
+                                "] because its destination [" + destination.getIdentifier() +
+                                "] is an Output Port that does not belong to this Process Group");
                     }
                 } else if (isInputPort(destination)) {
                     if (!processGroups.containsKey(destinationGroup.getIdentifier())) {
-                        throw new IllegalStateException("Cannot add Connection to Process Group because its destination is an Input "
-                            + "Port but the Input Port does not belong to a child Process Group");
+                        throw new IllegalStateException("Cannot add Connection from " + source.getConnectableType().name() + "[" + source.getIdentifier() +
+                                "] from Process Group [" + sourceGroup.getIdentifier() +
+                                "] to Process Group [" + destinationGroup.getIdentifier() +
+                                "] because its destination [" + destination.getIdentifier() +
+                                "] is an Input Port but the Input Port does not belong to a child Process Group");
                     }
                 } else if (destinationGroup != this) {
-                    throw new IllegalStateException("Cannot add Connection between " + source.getIdentifier() + " and " + destination.getIdentifier()
-                        + " because they are in different Process Groups and neither is an Input Port or Output Port");
+                    throw new IllegalStateException("Cannot add Connection from " + source.getConnectableType().name() + "[" + source.getIdentifier() +
+                            "] from Process Group [" + sourceGroup.getIdentifier() +
+                            "] to Process Group [" + destinationGroup.getIdentifier() +
+                            "] destination " + destination.getConnectableType().name() + "[" + destination.getIdentifier() +
+                            "] because they are in different Process Groups and neither is an Input Port or Output Port");
                 }
             }
 
+            ensureUniqueVersionControlId(connection, getConnections());
             connection.setProcessGroup(this);
             source.addConnection(connection);
             if (source != destination) {  // don't call addConnection twice if it's a self-looping connection.
@@ -1401,6 +1485,7 @@ public final class StandardProcessGroup implements ProcessGroup {
                 throw new IllegalStateException("A label already exists in this ProcessGroup with ID " + label.getIdentifier());
             }
 
+            ensureUniqueVersionControlId(label, getLabels());
             label.setProcessGroup(this);
             labels.put(label.getIdentifier(), label);
             onComponentModified();
@@ -2150,6 +2235,8 @@ public final class StandardProcessGroup implements ProcessGroup {
             if (existing != null) {
                 throw new IllegalStateException("A funnel already exists in this ProcessGroup with ID " + funnel.getIdentifier());
             }
+
+            ensureUniqueVersionControlId(funnel, getFunnels());
 
             funnel.setProcessGroup(this);
             funnels.put(funnel.getIdentifier(), funnel);
@@ -3480,7 +3567,7 @@ public final class StandardProcessGroup implements ProcessGroup {
             @Override
             public String getRegistryName() {
                 final String registryId = versionControlInformation.getRegistryIdentifier();
-                final FlowRegistry registry = flowRegistryClient.getFlowRegistry(registryId);
+                final FlowRegistryClientNode registry = flowManager.getFlowRegistryClient(registryId);
                 return registry == null ? registryId : registry.getName();
             }
 
@@ -3543,6 +3630,7 @@ public final class StandardProcessGroup implements ProcessGroup {
         svci.setBucketName(versionControlInformation.getBucketName());
         svci.setFlowName(versionControlInformation.getFlowName());
         svci.setFlowDescription(versionControlInformation.getFlowDescription());
+        svci.setStorageLocation(versionControlInformation.getStorageLocation());
 
         final VersionedFlowState flowState = versionControlInformation.getStatus().getState();
         versionControlFields.setStale(flowState == VersionedFlowState.STALE || flowState == VersionedFlowState.LOCALLY_MODIFIED_AND_STALE);
@@ -3560,7 +3648,7 @@ public final class StandardProcessGroup implements ProcessGroup {
                 parent.onComponentModified();
             }
 
-            scheduler.submitFrameworkTask(() -> synchronizeWithFlowRegistry(flowRegistryClient));
+            scheduler.submitFrameworkTask(() -> synchronizeWithFlowRegistry(flowManager));
         } finally {
             writeLock.unlock();
         }
@@ -3696,14 +3784,14 @@ public final class StandardProcessGroup implements ProcessGroup {
     }
 
     @Override
-    public void synchronizeWithFlowRegistry(final FlowRegistryClient flowRegistryClient) {
+    public void synchronizeWithFlowRegistry(final FlowManager flowManager) {
         final StandardVersionControlInformation vci = versionControlInfo.get();
         if (vci == null) {
             return;
         }
 
         final String registryId = vci.getRegistryIdentifier();
-        final FlowRegistry flowRegistry = flowRegistryClient.getFlowRegistry(registryId);
+        final FlowRegistryClientNode flowRegistry = flowManager.getFlowRegistryClient(registryId);
         if (flowRegistry == null) {
             final String message = String.format("Unable to synchronize Process Group with Flow Registry because Process Group was placed under Version Control using Flow Registry "
                 + "with identifier %s but cannot find any Flow Registry with this identifier", registryId);
@@ -3719,10 +3807,16 @@ public final class StandardProcessGroup implements ProcessGroup {
             // We have not yet obtained the snapshot from the Flow Registry, so we need to request the snapshot of our local version of the flow from the Flow Registry.
             // This allows us to know whether or not the flow has been modified since it was last synced with the Flow Registry.
             try {
-                final VersionedFlowSnapshot registrySnapshot = flowRegistry.getFlowContents(vci.getBucketIdentifier(), vci.getFlowIdentifier(), vci.getVersion(), false);
+                final ValidationStatus validationStatus = flowRegistry.getValidationStatus(10, TimeUnit.SECONDS);
+                if (validationStatus == ValidationStatus.VALIDATING) {
+                    throw new FlowRegistryException(flowRegistry + " cannot currently be used to synchronize with Flow Registry because it is currently validating");
+                }
+
+                final RegisteredFlowSnapshot registrySnapshot = flowRegistry.getFlowContents(
+                        FlowRegistryClientContextFactory.getAnonymousContext(), vci.getBucketIdentifier(), vci.getFlowIdentifier(), vci.getVersion(), false);
                 final VersionedProcessGroup registryFlow = registrySnapshot.getFlowContents();
                 vci.setFlowSnapshot(registryFlow);
-            } catch (final IOException | NiFiRegistryException e) {
+            } catch (final IOException | FlowRegistryException e) {
                 final String message = String.format("Failed to synchronize Process Group with Flow Registry because could not retrieve version %s of flow with identifier %s in bucket %s",
                     vci.getVersion(), vci.getFlowIdentifier(), vci.getBucketIdentifier());
                 versionControlFields.setSyncFailureExplanation(message);
@@ -3740,7 +3834,7 @@ public final class StandardProcessGroup implements ProcessGroup {
         }
 
         try {
-            final VersionedFlow versionedFlow = flowRegistry.getVersionedFlow(vci.getBucketIdentifier(), vci.getFlowIdentifier());
+            final RegisteredFlow versionedFlow = flowRegistry.getFlow(FlowRegistryClientContextFactory.getAnonymousContext(), vci.getBucketIdentifier(), vci.getFlowIdentifier());
             final int latestVersion = (int) versionedFlow.getVersionCount();
             vci.setBucketName(versionedFlow.getBucketName());
             vci.setFlowName(versionedFlow.getName());
@@ -3762,7 +3856,7 @@ public final class StandardProcessGroup implements ProcessGroup {
             }
 
             versionControlFields.setSyncFailureExplanation(null);
-        } catch (final IOException | NiFiRegistryException e) {
+        } catch (final IOException | FlowRegistryException e) {
             final String message = "Failed to synchronize Process Group with Flow Registry : " + e.getMessage();
             versionControlFields.setSyncFailureExplanation(message);
 
@@ -3800,6 +3894,7 @@ public final class StandardProcessGroup implements ProcessGroup {
             .componentIdLookup(ComponentIdLookup.VERSIONED_OR_GENERATE)
             .mapInstanceIdentifiers(false)
             .mapControllerServiceReferencesToVersionedId(true)
+            .mapFlowRegistryClientId(false)
             .build();
 
         synchronizeFlow(proposedSnapshot, synchronizationOptions, flowMappingOptions);
@@ -3901,7 +3996,7 @@ public final class StandardProcessGroup implements ProcessGroup {
 
         try {
             final NiFiRegistryFlowMapper mapper = new NiFiRegistryFlowMapper(extensionManager);
-            final VersionedProcessGroup versionedGroup = mapper.mapProcessGroup(this, controllerServiceProvider, flowRegistryClient, false);
+            final VersionedProcessGroup versionedGroup = mapper.mapProcessGroup(this, controllerServiceProvider, flowManager, false);
 
             final ComparableDataFlow currentFlow = new StandardComparableDataFlow("Local Flow", versionedGroup);
             final ComparableDataFlow snapshotFlow = new StandardComparableDataFlow("Versioned Flow", vci.getFlowSnapshot());
@@ -3972,7 +4067,6 @@ public final class StandardProcessGroup implements ProcessGroup {
         return new VersionedFlowSynchronizationContext.Builder()
             .componentIdGenerator(componentIdGenerator)
             .flowManager(flowManager)
-            .flowRegistryClient(flowRegistryClient)
             .reloadComponent(reloadComponent)
             .controllerServiceProvider(controllerServiceProvider)
             .extensionManager(extensionManager)
@@ -4253,6 +4347,24 @@ public final class StandardProcessGroup implements ProcessGroup {
             DataUnit.parseDataSize(defaultBackPressureDataSizeThreshold, DataUnit.B);
             this.defaultBackPressureDataSizeThreshold.set(defaultBackPressureDataSizeThreshold.toUpperCase());
         }
+    }
+
+    @Override
+    public QueueSize getQueueSize() {
+        int count = 0;
+        long contentSize = 0L;
+
+        for (final ProcessGroup childGroup : processGroups.values()) {
+            final QueueSize queueSize = childGroup.getQueueSize();
+            count += queueSize.getObjectCount();
+            contentSize += queueSize.getByteCount();
+        }
+        for (final Connection connection : connections.values()) {
+            final QueueSize queueSize = connection.getFlowFileQueue().size();
+            count += queueSize.getObjectCount();
+            contentSize += queueSize.getByteCount();
+        }
+        return new QueueSize(count, contentSize);
     }
 
     @Override
