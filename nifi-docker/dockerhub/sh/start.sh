@@ -50,6 +50,17 @@ prop_replace 'keystoreType'       "PKCS12"                              ${nifi_t
 prop_replace 'truststore'         "${NIFI_HOME}/conf/truststore.p12"    ${nifi_toolkit_props_file}
 prop_replace 'truststoreType'     "PKCS12"                              ${nifi_toolkit_props_file}
 
+# useful for storing  in docker/k8s volumes
+if [ ! -z "${FLOW_XML_GZ}" ]; then
+    prop_replace 'nifi.flow.configuration.file'       ${FLOW_XML_GZ}
+fi
+if [ ! -z "${FLOW_XML_GZ}" ]; then
+    prop_replace 'nifi.flow.configuration.json.file'       ${FLOW_JSON_GZ}
+fi
+if [ ! -z "${FLOW_ARCHIVE_DIR}" ]; then
+    prop_replace 'nifi.flow.configuration.file'       ${FLOW_ARCHIVE_DIR}
+fi
+
 if [ -n "${NIFI_WEB_HTTP_PORT}" ]; then
     prop_replace 'nifi.web.https.port'                        ''
     prop_replace 'nifi.web.https.host'                        ''

@@ -77,6 +77,9 @@ RUN curl -fSL ${MIRROR_BASE_URL}/${NIFI_BINARY_PATH} -o ${NIFI_BASE_DIR}/nifi-${
     && mkdir -p ${NIFI_LOG_DIR} \
     && ln -s ${NIFI_HOME} ${NIFI_BASE_DIR}/nifi-${NIFI_VERSION}
 
+# Copy Database drivers
+RUN curl -fSL https://jdbc.postgresql.org/download/postgresql-42.5.0.jar -o ${NIFI_HOME}/lib/postgresql-42.4.0.jar
+
 VOLUME ${NIFI_LOG_DIR} \
        ${NIFI_HOME}/conf \
        ${NIFI_HOME}/database_repository \
